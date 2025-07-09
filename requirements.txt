@@ -1,0 +1,4 @@
+HdRezkaApi==11.0.0     # API для работы с HDRezka (последняя версия на PyPI) :contentReference[oaicite:0]{index=0}
+requests               # HTTP-запросы
+tqdm                   # прогресс-бар при скачивании
+colorama               # цветной вывод в консоль
