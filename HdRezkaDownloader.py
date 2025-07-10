@@ -32,7 +32,8 @@ logger = logging.getLogger(__name__)
 
 # Константы
 DEFAULT_DOWNLOAD_DIR = "Videos"
-CONFIG_FILE = "downloader_config.json"
+CONFIG_DIR = Path.home() / "Documents" / "HdRezkaDownloader"
+CONFIG_FILE = CONFIG_DIR / "downloader_config.json"
 MAX_RETRIES = 3
 CHUNK_SIZE = 8192
 TIMEOUT = 30
@@ -49,23 +50,32 @@ class DownloadConfig:
         self.preferred_quality = None
         self.preferred_translator = None
         self.auto_select_single_option = True
+        self.auto_reload = False  # Новая настройка
         
     def load_config(self):
         """Загрузка конфигурации из файла"""
         try:
-            if os.path.exists(CONFIG_FILE):
+            if CONFIG_FILE.exists():
                 with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
                     config_data = json.load(f)
                     for key, value in config_data.items():
                         if hasattr(self, key):
                             setattr(self, key, value)
                 logger.info("Конфигурация загружена из файла")
+            else:
+                # Создаем конфигурацию по умолчанию
+                self.save_config()
+                logger.info("Создана конфигурация по умолчанию")
         except Exception as e:
             logger.warning(f"Не удалось загрузить конфигурацию: {e}")
+            self.save_config()
     
     def save_config(self):
         """Сохранение конфигурации в файл"""
         try:
+            # Создаем директорию если не существует
+            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+            
             config_data = {
                 'download_dir': self.download_dir,
                 'max_retries': self.max_retries,
@@ -74,7 +84,8 @@ class DownloadConfig:
                 'max_workers': self.max_workers,
                 'preferred_quality': self.preferred_quality,
                 'preferred_translator': self.preferred_translator,
-                'auto_select_single_option': self.auto_select_single_option
+                'auto_select_single_option': self.auto_select_single_option,
+                'auto_reload': self.auto_reload
             }
             with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
                 json.dump(config_data, f, indent=2, ensure_ascii=False)
@@ -182,6 +193,46 @@ def get_user_choice(prompt: str, max_value: int) -> int:
         except KeyboardInterrupt:
             print(f"\n{Fore.YELLOW}Операция прервана пользователем{Style.RESET_ALL}")
             sys.exit(0)
+
+def show_settings_menu(config: DownloadConfig):
+    """Показывает меню настроек"""
+    while True:
+        clear_console()
+        print(f"{Fore.CYAN}=== НАСТРОЙКИ ==={Style.RESET_ALL}")
+        print(f"{Fore.GREEN}[1] Выйти{Style.RESET_ALL}")
+        auto_reload_status = "On" if config.auto_reload else "Off"
+        print(f"{Fore.GREEN}[2] Автоматическая перезагрузка : {auto_reload_status}{Style.RESET_ALL}")
+        print(f"{Fore.GREEN}[3] Тест{Style.RESET_ALL}")
+        
+        choice = get_user_choice(f"\n{Fore.YELLOW}Выберите опцию: {Style.RESET_ALL}", 3)
+        
+        if choice == 1:
+            # Выход из настроек
+            break
+        elif choice == 2:
+            # Переключение автоматической перезагрузки
+            config.auto_reload = not config.auto_reload
+            config.save_config()
+            status = "включена" if config.auto_reload else "выключена"
+            print(f"{Fore.GREEN}Автоматическая перезагрузка {status}{Style.RESET_ALL}")
+            time.sleep(1)
+        elif choice == 3:
+            # Тест функция
+            print(f"{Fore.CYAN}Тестовая функция выполнена!{Style.RESET_ALL}")
+            input(f"{Fore.YELLOW}Нажмите Enter для продолжения...{Style.RESET_ALL}")
+
+def auto_reload_functionality(config: DownloadConfig):
+    """Функционал автоматической перезагрузки"""
+    if config.auto_reload:
+        print(f"{Fore.CYAN}Автоматическая перезагрузка включена{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}Перезапуск программы через 3 секунды...{Style.RESET_ALL}")
+        time.sleep(3)
+        # Перезапуск программы
+        python = sys.executable
+        os.execl(python, python, *sys.argv)
+    else:
+        print(f"{Fore.YELLOW}Программа завершена. Нажмите Enter для выхода...{Style.RESET_ALL}")
+        input()
 
 def sanitize_filename(filename: str) -> str:
     """Очищает имя файла от недопустимых символов"""
@@ -505,69 +556,86 @@ def main():
         # Создаем менеджер скачивания
         download_manager = DownloadManager(config)
         
-        # Получаем URL
-        url = input(f"{Fore.YELLOW}Введите ссылку на HDRezka: {Style.RESET_ALL}").strip()
-        
-        if not url:
-            print(f"{Fore.RED}URL не может быть пустым{Style.RESET_ALL}")
-            return
-        
-        # Проверяем URL
-        parsed_url = urlparse(url)
-        if not parsed_url.scheme or not parsed_url.netloc:
-            print(f"{Fore.RED}Некорректный URL{Style.RESET_ALL}")
-            return
-        
-        clear_console()
-        
-        # Создаем объект API
-        print(f"{Fore.CYAN}Подключение к HDRezka...{Style.RESET_ALL}")
-        rezka = HdRezkaApi(url)
-        
-        # Проверяем успешность подключения
-        if not rezka.ok:
-            print(f"{Fore.RED}Ошибка подключения: {rezka.exception}{Style.RESET_ALL}")
-            return
-        
-        # Определяем тип контента
-        content_type = detect_content_type(rezka)
-        
-        if content_type == "unknown":
-            print(f"{Fore.RED}Не удалось определить тип контента{Style.RESET_ALL}")
-            return
-        
-        # Получаем название
-        content_name = "Unknown"
-        if hasattr(rezka, 'name') and rezka.name:
-            content_name = rezka.name
-        elif hasattr(rezka, 'title') and rezka.title:
-            content_name = rezka.title
-        
-        print(f"{Fore.GREEN}Найден {content_type}: {content_name}{Style.RESET_ALL}")
-        
-        # Обрабатываем контент
-        if content_type == "movie":
-            success = process_movie(rezka, config, download_manager, content_name)
-        elif content_type == "series":
-            success = process_series(rezka, config, download_manager, content_name)
-        else:
-            success = False
-        
-        # Показываем статистику
-        stats = download_manager.stats
-        print(f"\n{Fore.MAGENTA}Статистика скачивания:{Style.RESET_ALL}")
-        print(f"{Fore.BLUE}Всего попыток: {stats['total_downloads']}{Style.RESET_ALL}")
-        print(f"{Fore.GREEN}Успешно: {stats['successful_downloads']}{Style.RESET_ALL}")
-        print(f"{Fore.RED}Неудачно: {stats['failed_downloads']}{Style.RESET_ALL}")
-        print(f"{Fore.CYAN}Скачано байт: {stats['total_bytes']:,}{Style.RESET_ALL}")
-        
-        # Сохраняем конфигурацию
-        config.save_config()
-        
-        if success:
-            print(f"\n{Fore.GREEN}Операция завершена успешно!{Style.RESET_ALL}")
-        else:
-            print(f"\n{Fore.RED}Операция завершена с ошибками{Style.RESET_ALL}")
+        while True:
+            clear_console()
+            print(f"{Fore.CYAN}=== HDRezka Downloader ==={Style.RESET_ALL}")
+            print(f"{Fore.GREEN}[1] Настройки{Style.RESET_ALL}")
+            print(f"{Fore.YELLOW}Или введите ссылку на HDRezka:{Style.RESET_ALL}")
+            
+            user_input = input(f"{Fore.YELLOW}Ваш выбор: {Style.RESET_ALL}").strip()
+            
+            if user_input == "1":
+                # Открываем меню настроек
+                show_settings_menu(config)
+                continue
+            elif not user_input:
+                print(f"{Fore.RED}Ввод не может быть пустым{Style.RESET_ALL}")
+                time.sleep(1)
+                continue
+            
+            # Проверяем URL
+            parsed_url = urlparse(user_input)
+            if not parsed_url.scheme or not parsed_url.netloc:
+                print(f"{Fore.RED}Некорректный URL{Style.RESET_ALL}")
+                time.sleep(2)
+                continue
+            
+            clear_console()
+            
+            # Создаем объект API
+            print(f"{Fore.CYAN}Подключение к HDRezka...{Style.RESET_ALL}")
+            rezka = HdRezkaApi(user_input)
+            
+            # Проверяем успешность подключения
+            if not rezka.ok:
+                print(f"{Fore.RED}Ошибка подключения: {rezka.exception}{Style.RESET_ALL}")
+                input(f"{Fore.YELLOW}Нажмите Enter для продолжения...{Style.RESET_ALL}")
+                continue
+            
+            # Определяем тип контента
+            content_type = detect_content_type(rezka)
+            
+            if content_type == "unknown":
+                print(f"{Fore.RED}Не удалось определить тип контента{Style.RESET_ALL}")
+                input(f"{Fore.YELLOW}Нажмите Enter для продолжения...{Style.RESET_ALL}")
+                continue
+            
+            # Получаем название
+            content_name = "Unknown"
+            if hasattr(rezka, 'name') and rezka.name:
+                content_name = rezka.name
+            elif hasattr(rezka, 'title') and rezka.title:
+                content_name = rezka.title
+            
+            print(f"{Fore.GREEN}Найден {content_type}: {content_name}{Style.RESET_ALL}")
+            
+            # Обрабатываем контент
+            if content_type == "movie":
+                success = process_movie(rezka, config, download_manager, content_name)
+            elif content_type == "series":
+                success = process_series(rezka, config, download_manager, content_name)
+            else:
+                success = False
+            
+            # Показываем статистику
+            stats = download_manager.stats
+            print(f"\n{Fore.MAGENTA}Статистика скачивания:{Style.RESET_ALL}")
+            print(f"{Fore.BLUE}Всего попыток: {stats['total_downloads']}{Style.RESET_ALL}")
+            print(f"{Fore.GREEN}Успешно: {stats['successful_downloads']}{Style.RESET_ALL}")
+            print(f"{Fore.RED}Неудачно: {stats['failed_downloads']}{Style.RESET_ALL}")
+            print(f"{Fore.CYAN}Скачано байт: {stats['total_bytes']:,}{Style.RESET_ALL}")
+            
+            # Сохраняем конфигурацию
+            config.save_config()
+            
+            if success:
+                print(f"\n{Fore.GREEN}Операция завершена успешно!{Style.RESET_ALL}")
+            else:
+                print(f"\n{Fore.RED}Операция завершена с ошибками{Style.RESET_ALL}")
+            
+            # Проверяем автоматическую перезагрузку
+            auto_reload_functionality(config)
+            break
             
     except KeyboardInterrupt:
         print(f"\n{Fore.YELLOW}Операция прервана пользователем{Style.RESET_ALL}")
